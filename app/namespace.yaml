@@ -1,0 +1,22 @@
+# =============================================================================
+# NAMESPACE
+# =============================================================================
+# Namespaces provide logical isolation for resources within a cluster.
+#
+# KEY FIELDS:
+# - metadata.name       → Unique namespace identifier (required)
+# - metadata.labels     → Used for RBAC, network policies, and resource quotas
+#
+# CUSTOMIZATION:
+# - Change "complex-app" to your app name
+# - Add resource quotas (see ResourceQuota object) for production
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: complex-app
+  labels:
+    app.kubernetes.io/name: complex-app
+    app.kubernetes.io/part-of: demo-platform
+    environment: dev                    # Change to "staging" or "prod" as needed

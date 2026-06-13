@@ -1,0 +1,184 @@
+# =============================================================================
+# KEDA ScaledObject
+# =============================================================================
+# KEDA (Kubernetes Event-Driven Autoscaling) extends HPA with custom triggers.
+# ScaledObject connects a workload to one or more scaling triggers.
+#
+# KEY FIELDS:
+# - spec.scaleTargetRef       → What to scale (Deployment/StatefulSet) (required)
+# - spec.minReplicaCount      → Minimum replicas (default: 0, set 1+ for always-on) 
+# - spec.maxReplicaCount      → Maximum replicas (required)
+# - spec.pollingInterval      → How often KEDA checks triggers (seconds) (optional)
+# - spec.cooldownPeriod       → Wait before scaling to 0 after last trigger (optional)
+# - spec.triggers             → Array of scaling triggers (required)
+#
+# KEDA vs HPA:
+# - HPA: scales on CPU/memory/custom metrics (min 1 replica)
+# - KEDA: scales on events (queues, cron, external metrics), can scale to 0
+# - KEDA creates/manages an HPA under the hood
+#
+# INSTALL KEDA:
+#   helm repo add kedacore https://kedacore.github.io/charts
+#   helm repo update
+#   helm install keda kedacore/keda --namespace keda --create-namespace --wait
+#
+# CUSTOMIZATION:
+# - Change triggers based on your scaling needs
+# - Adjust polling interval vs responsiveness tradeoff
+# - Use TriggerAuthentication for secured metric sources
+# =============================================================================
+
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: complex-app-scaledobject
+  namespace: complex-app
+  labels:
+    app.kubernetes.io/name: complex-app
+spec:
+  # --- Target Workload ---
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: complex-app                   # Must match deployment name
+
+  # --- Scaling Bounds ---
+  minReplicaCount: 2                    # Never go below 2 (HA minimum)
+                                        # Set to 0 for scale-to-zero (e.g., queue workers)
+  maxReplicaCount: 15                   # Upper bound
+
+  # --- Polling & Cooldown ---
+  pollingInterval: 15                   # Check triggers every 15 seconds
+  cooldownPeriod: 300                   # Wait 5 min before scaling down after last trigger
+                                        # Prevents flapping for bursty workloads
+
+  # --- Advanced Settings ---
+  advanced:
+    restoreToOriginalReplicaCount: false  # Don't reset replicas when ScaledObject is deleted
+    horizontalPodAutoscalerConfig:
+      behavior:                          # Same as HPA behavior (controls scaling speed)
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 3
+              periodSeconds: 30
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+
+  # --- Scaling Triggers ---
+  triggers:
+    # Trigger 1: CPU-based (same as HPA but managed by KEDA)
+    - type: cpu
+      metricType: Utilization           # Options: Utilization, Value, AverageValue
+      metadata:
+        value: "70"                     # Scale up when CPU > 70% of request
+
+    # Trigger 2: Memory-based
+    - type: memory
+      metricType: Utilization
+      metadata:
+        value: "80"                     # Scale up when memory > 80% of request
+
+    # Trigger 3: Prometheus metrics (custom business metrics)
+    - type: prometheus
+      metadata:
+        serverAddress: http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+        metricName: http_requests_per_second
+        query: |
+          sum(rate(http_requests_total{namespace="complex-app", service="complex-app-service"}[2m]))
+        threshold: "100"                # Scale up when total RPS > 100
+        activationThreshold: "10"       # Don't activate scaling until RPS > 10
+
+    # Trigger 4: Cron-based (predictive scaling)
+    - type: cron
+      metadata:
+        timezone: America/New_York
+        start: "0 8 * * 1-5"           # Scale up at 8 AM weekdays
+        end: "0 20 * * 1-5"            # Scale down at 8 PM weekdays
+        desiredReplicas: "5"            # During business hours, maintain 5 replicas
+
+    # Trigger 5: External metrics (e.g., RabbitMQ queue length)
+    # Uncomment if using a message queue:
+    # - type: rabbitmq
+    #   metadata:
+    #     host: amqp://guest:guest@rabbitmq.complex-app.svc.cluster.local:5672/
+    #     queueName: tasks
+    #     queueLength: "10"             # Scale up when queue > 10 messages per replica
+    #   authenticationRef:
+    #     name: rabbitmq-auth            # Reference to TriggerAuthentication
+
+---
+# =============================================================================
+# TRIGGER AUTHENTICATION
+# =============================================================================
+# TriggerAuthentication provides credentials to KEDA triggers securely.
+# Referenced by ScaledObject triggers via authenticationRef.
+#
+# KEY FIELDS:
+# - spec.secretTargetRef    → Reference to Kubernetes Secrets (required)
+#
+# CUSTOMIZATION:
+# - Add entries for each secret your triggers need
+# - Use ClusterTriggerAuthentication for cluster-wide triggers
+# =============================================================================
+
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: prometheus-auth
+  namespace: complex-app
+spec:
+  # No auth needed for in-cluster Prometheus, but shown as example
+  secretTargetRef: []
+  # Example with secrets:
+  # secretTargetRef:
+  #   - parameter: bearerToken
+  #     name: prometheus-token
+  #     key: token
+  # env:
+  #   - parameter: username
+  #     name: PROMETHEUS_USER
+  #     containerName: complex-app
+
+---
+# =============================================================================
+# ScaledObject for Queue Worker (Scale-to-Zero Example)
+# =============================================================================
+# Demonstrates KEDA's scale-to-zero capability for event-driven workloads.
+# When the queue is empty, replicas drop to 0 (saving resources).
+# When messages arrive, KEDA scales from 0 → minReplicaCount → based on load.
+# =============================================================================
+
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: queue-worker-scaledobject
+  namespace: complex-app
+  labels:
+    app.kubernetes.io/name: queue-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: queue-worker                  # A separate worker deployment
+
+  minReplicaCount: 0                    # Scale to zero when idle!
+  maxReplicaCount: 20
+  pollingInterval: 10                   # Check every 10s (more responsive for queues)
+  cooldownPeriod: 120                   # Wait 2 min before scaling to 0
+
+  triggers:
+    # Scale based on Prometheus metric representing queue depth
+    - type: prometheus
+      metadata:
+        serverAddress: http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+        metricName: queue_depth
+        query: |
+          sum(app_queue_messages_pending{namespace="complex-app"})
+        threshold: "5"                  # 5 messages per replica
+        activationThreshold: "1"        # Activate (scale from 0) when at least 1 message

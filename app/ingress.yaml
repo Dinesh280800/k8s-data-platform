@@ -1,0 +1,58 @@
+# =============================================================================
+# INGRESS
+# =============================================================================
+# Ingress exposes HTTP/HTTPS routes from outside the cluster to Services.
+# Requires an Ingress Controller (we use nginx-ingress on kind).
+#
+# KEY FIELDS:
+# - spec.ingressClassName   → Which Ingress Controller handles this (required in k8s 1.18+)
+# - spec.rules[].host       → Hostname to match (optional; omit for catch-all)
+# - spec.rules[].http.paths → URL path → Service mapping (required)
+# - spec.tls                → TLS termination config (optional)
+#
+# CUSTOMIZATION:
+# - Change host to your domain (use /etc/hosts for local testing)
+# - Add TLS section for HTTPS
+# - Adjust path types: Prefix (starts with), Exact (exact match), ImplementationSpecific
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: complex-app-ingress
+  namespace: complex-app
+  labels:
+    app.kubernetes.io/name: complex-app
+  annotations:
+    # Nginx Ingress Controller specific annotations
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"      # Max request body
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"    # Backend read timeout
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"    # Backend send timeout
+    nginx.ingress.kubernetes.io/rate-limit: "100"           # Rate limiting
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+spec:
+  ingressClassName: nginx               # Must match installed Ingress Controller class
+  rules:
+    - host: complex-app.local           # Add "127.0.0.1 complex-app.local" to /etc/hosts
+      http:
+        paths:
+          - path: /
+            pathType: Prefix            # Match any path starting with /
+            backend:
+              service:
+                name: complex-app-service
+                port:
+                  name: http            # Reference service port by name
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: complex-app-service
+                port:
+                  name: metrics
+  # --- TLS Configuration (optional) ---
+  # tls:
+  #   - hosts:
+  #       - complex-app.local
+  #     secretName: complex-app-tls     # Secret containing tls.crt and tls.key

@@ -1,0 +1,71 @@
+# =============================================================================
+# KIND MULTI-NODE CLUSTER CONFIGURATION
+# =============================================================================
+# This config creates a 1 control-plane + 3 worker node cluster locally.
+# 
+# KEY FIELDS EXPLAINED:
+# - kind: Cluster          → The Kind resource type (always "Cluster" for kind configs)
+# - apiVersion             → Kind API version; v1alpha4 is the current stable
+# - nodes[].role           → Either "control-plane" or "worker"
+# - nodes[].kubeadmConfigPatches → Inline kubeadm config overrides per node
+# - nodes[].extraPortMappings   → Maps container ports to host ports (needed for Ingress)
+# - nodes[].labels         → Kubernetes labels applied to the node
+# - networking.podSubnet   → CIDR for pod IPs (default: 10.244.0.0/16)
+# - networking.serviceSubnet → CIDR for service ClusterIPs (default: 10.96.0.0/12)
+#
+# CUSTOMIZATION:
+# - Add/remove worker nodes by adding/removing entries under nodes[]
+# - Change extraPortMappings ports if 80/443 are already in use on your host
+# - For production-like testing, add more workers
+# =============================================================================
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+networking:
+  podSubnet: "10.244.0.0/16"        # Pod network CIDR (required: must not overlap with host network)
+  serviceSubnet: "10.96.0.0/12"      # Service ClusterIP range (required)
+  disableDefaultCNI: false           # Use kindnet CNI (optional: set true to install your own CNI)
+
+nodes:
+  # --- Control Plane Node ---
+  # Runs etcd, kube-apiserver, kube-scheduler, kube-controller-manager
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    # Port mappings allow Ingress traffic from host → cluster
+    extraPortMappings:
+      - containerPort: 80            # HTTP traffic into the cluster
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443           # HTTPS traffic into the cluster
+        hostPort: 443
+        protocol: TCP
+      - containerPort: 30000         # NodePort range start (for testing)
+        hostPort: 30000
+        protocol: TCP
+      - containerPort: 30001         # Additional NodePort
+        hostPort: 30001
+        protocol: TCP
+
+  # --- Worker Node 1 ---
+  - role: worker
+    labels:
+      tier: frontend                 # Label for pod affinity/node selection
+      environment: dev
+
+  # --- Worker Node 2 ---
+  - role: worker
+    labels:
+      tier: backend
+      environment: dev
+
+  # --- Worker Node 3 (OPTIONAL: uncomment if you have 8GB+ RAM) ---
+  # - role: worker
+  #   labels:
+  #     tier: backend
+  #     environment: dev

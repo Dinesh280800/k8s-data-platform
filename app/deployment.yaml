@@ -1,0 +1,260 @@
+# =============================================================================
+# DEPLOYMENT - Core Application
+# =============================================================================
+# A Deployment manages a set of identical pods, ensuring the desired state.
+# This manifest demonstrates production-grade patterns:
+# - Rolling update strategy with surge/unavailability controls
+# - Resource requests/limits (QoS: Burstable)
+# - Liveness, readiness, and startup probes
+# - Anti-affinity for spreading pods across nodes
+# - Security context (non-root, read-only filesystem)
+# - Environment variables from ConfigMaps and Secrets
+#
+# KEY FIELDS EXPLAINED:
+# - spec.replicas              → Desired number of pod instances (required)
+# - spec.strategy              → How to replace old pods (RollingUpdate or Recreate)
+# - spec.template.spec         → Pod specification (required)
+# - containers[].resources     → CPU/memory requests (scheduling) and limits (enforcement)
+# - containers[].probes        → Health checks for lifecycle management
+#
+# CUSTOMIZATION:
+# - Adjust replicas for your load (start with 3 for HA)
+# - Tune resource requests based on actual app profiling
+# - Modify probe paths/ports to match your app's health endpoints
+# - Change image to your actual container image
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: complex-app
+  namespace: complex-app
+  labels:
+    app.kubernetes.io/name: complex-app
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: api-server
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  # --- Replica Count ---
+  # Number of pod instances to run. Overridden by HPA when active.
+  replicas: 3
+
+  # --- Selector ---
+  # Must match spec.template.metadata.labels (required, immutable after creation)
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: complex-app
+      app.kubernetes.io/component: api-server
+
+  # --- Update Strategy ---
+  strategy:
+    type: RollingUpdate             # Options: RollingUpdate (default) or Recreate
+    rollingUpdate:
+      maxSurge: 1                   # Max pods above desired count during update (can be % or absolute)
+      maxUnavailable: 0             # Max pods unavailable during update (0 = always maintain full capacity)
+      # maxSurge=1, maxUnavailable=0 means: spin up 1 new pod, verify it's ready,
+      # then terminate 1 old pod. Safest but slowest strategy.
+
+  # --- Revision History ---
+  revisionHistoryLimit: 5           # Number of old ReplicaSets to retain (for rollback)
+
+  # --- Min Ready Seconds ---
+  minReadySeconds: 10               # Wait 10s after pod is ready before considering it available
+                                    # Prevents cascading failures from premature readiness
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: complex-app
+        app.kubernetes.io/component: api-server
+        app.kubernetes.io/version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"    # Tell Prometheus to scrape this pod
+        prometheus.io/port: "8080"      # Port where metrics are exposed
+        prometheus.io/path: "/metrics"  # Metrics endpoint path
+    spec:
+      # --- Service Account ---
+      serviceAccountName: default       # Use a dedicated SA in production with RBAC
+
+      # --- Security Context (Pod-level) ---
+      securityContext:
+        runAsNonRoot: true              # Prevent running as root (required for security)
+        runAsUser: 1000                 # UID for the container process
+        runAsGroup: 1000                # GID for the container process
+        fsGroup: 1000                   # Group for volume mounts
+
+      # --- Anti-Affinity ---
+      # Spread pods across different nodes for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - complex-app
+                topologyKey: kubernetes.io/hostname
+                # "preferred" = best-effort spread; "required" = hard constraint (may prevent scheduling)
+
+      # --- Topology Spread Constraints ---
+      # More granular than anti-affinity: ensures even distribution
+      topologySpreadConstraints:
+        - maxSkew: 1                     # Max difference in pod count between zones
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway  # ScheduleAnyway for small clusters; DoNotSchedule for prod
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: complex-app
+
+      # --- Termination Grace Period ---
+      terminationGracePeriodSeconds: 30  # Time to gracefully shut down before SIGKILL
+
+      # --- Init Containers ---
+      # Run before main containers; must succeed for pod to start
+      # UNCOMMENT when you deploy a real database:
+      # initContainers:
+      #   - name: wait-for-db
+      #     image: busybox:1.36
+      #     command:
+      #       - sh
+      #       - -c
+      #       - |
+      #         echo "Waiting for database to be reachable..."
+      #         until nc -z postgres-service.complex-app.svc.cluster.local 5432; do
+      #           echo "DB not ready, retrying in 2s..."
+      #           sleep 2
+      #         done
+      #         echo "Database is reachable!"
+      #     resources:
+      #       requests:
+      #         cpu: 10m
+      #         memory: 16Mi
+      #       limits:
+      #         cpu: 50m
+      #         memory: 32Mi
+
+      # --- Main Containers ---
+      containers:
+        - name: app
+          # Using nginx as a demo; replace with your actual application image
+          image: nginx:1.25-alpine
+          imagePullPolicy: IfNotPresent   # Options: Always, IfNotPresent, Never
+
+          ports:
+            - name: http
+              containerPort: 8080         # Port your app listens on
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090         # Prometheus metrics port
+              protocol: TCP
+
+          # --- Environment Variables from ConfigMap ---
+          envFrom:
+            - configMapRef:
+                name: app-config          # Injects ALL keys from ConfigMap as env vars
+            - secretRef:
+                name: app-secrets         # Injects ALL keys from Secret as env vars
+
+          # --- Individual Environment Variables ---
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name         # Downward API: pod name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace    # Downward API: namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName         # Downward API: node name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP          # Downward API: pod IP
+
+          # --- Resource Requests and Limits ---
+          # requests = scheduling guarantee (what scheduler reserves)
+          # limits = hard cap (OOMKilled if exceeded for memory; throttled for CPU)
+          resources:
+            requests:
+              cpu: 100m                  # 100 millicores = 0.1 CPU core (required for HPA)
+              memory: 128Mi              # 128 MiB guaranteed memory
+            limits:
+              cpu: 500m                  # 500 millicores = 0.5 CPU core max
+              memory: 256Mi              # 256 MiB max (OOMKilled if exceeded)
+
+          # --- Startup Probe ---
+          # Used for slow-starting containers. Disables liveness/readiness until success.
+          startupProbe:
+            httpGet:
+              path: /health              # Endpoint to check
+              port: http                 # Named port reference
+            initialDelaySeconds: 5       # Wait before first probe
+            periodSeconds: 5             # Check every 5 seconds
+            failureThreshold: 30         # 30 failures × 5s = 150s max startup time
+            # If startup probe never succeeds, pod is restarted
+
+          # --- Liveness Probe ---
+          # Detects deadlocked/broken containers → restarts the container
+          livenessProbe:
+            httpGet:
+              path: /health              # Must return 200-399 to pass
+              port: http
+            initialDelaySeconds: 0       # Start immediately after startup probe passes
+            periodSeconds: 15            # Check every 15 seconds
+            timeoutSeconds: 3            # Timeout per check
+            failureThreshold: 3          # 3 consecutive failures → restart
+            successThreshold: 1          # 1 success → healthy again
+
+          # --- Readiness Probe ---
+          # Controls whether pod receives traffic via Service
+          readinessProbe:
+            httpGet:
+              path: /ready               # Can be different from liveness (e.g., check dependencies)
+              port: http
+            initialDelaySeconds: 0       # Start immediately after startup probe passes
+            periodSeconds: 5             # Check frequently (affects traffic routing speed)
+            timeoutSeconds: 2            # Timeout per check
+            failureThreshold: 3          # 3 failures → removed from Service endpoints
+            successThreshold: 1          # 1 success → added back to endpoints
+
+          # --- Volume Mounts ---
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: nginx.conf        # Mount single key from ConfigMap as file
+              readOnly: true
+            - name: tmp-volume
+              mountPath: /tmp            # Writable temp directory (since filesystem is read-only)
+            - name: nginx-cache
+              mountPath: /var/cache/nginx # Nginx needs writable cache dir
+            - name: nginx-run
+              mountPath: /var/run         # Nginx PID file location
+
+          # --- Container Security Context ---
+          securityContext:
+            allowPrivilegeEscalation: false   # Prevent gaining more privileges
+            readOnlyRootFilesystem: true      # Immutable filesystem (security best practice)
+            capabilities:
+              drop:
+                - ALL                         # Drop all Linux capabilities
+
+      # --- Volumes ---
+      volumes:
+        - name: config-volume
+          configMap:
+            name: app-config             # Reference to ConfigMap
+            items:
+              - key: nginx.conf          # Specific key to mount
+                path: nginx.conf         # Filename in the mount path
+        - name: tmp-volume
+          emptyDir: {}                   # Ephemeral writable volume (lost on pod restart)
+        - name: nginx-cache
+          emptyDir: {}                   # Nginx cache (writable, ephemeral)
+        - name: nginx-run
+          emptyDir: {}                   # Nginx PID file (writable, ephemeral)

@@ -1,0 +1,210 @@
+# =============================================================================
+# PROMETHEUS ALERT RULES
+# =============================================================================
+# PrometheusRule CRD defines alerting rules that Prometheus evaluates.
+# When a rule's expression (expr) is true for the specified duration (for),
+# an alert fires and is sent to Alertmanager.
+#
+# KEY FIELDS:
+# - spec.groups[].name        → Group name (organizational) (required)
+# - spec.groups[].rules[].alert → Alert name (required)
+# - spec.groups[].rules[].expr  → PromQL expression (required)
+# - spec.groups[].rules[].for   → How long condition must be true (optional, prevents flapping)
+# - spec.groups[].rules[].labels → Labels added to alert (severity is key for routing)
+# - spec.groups[].rules[].annotations → Human-readable descriptions
+#
+# CUSTOMIZATION:
+# - Adjust thresholds based on your app's normal behavior
+# - Change "for" duration based on acceptable detection latency
+# - Add labels for routing to different receivers
+# =============================================================================
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: app-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: complex-app
+    # This label must match Prometheus's ruleSelector
+    release: monitoring
+spec:
+  groups:
+    # --- High CPU Usage Alerts ---
+    - name: cpu-alerts
+      rules:
+        # Alert: Pod CPU usage > 80% for 5 minutes
+        - alert: HighCPUUsage
+          expr: |
+            (
+              sum(rate(container_cpu_usage_seconds_total{
+                namespace="complex-app",
+                container!=""
+              }[5m])) by (pod)
+              /
+              sum(kube_pod_container_resource_requests{
+                namespace="complex-app",
+                resource="cpu"
+              }) by (pod)
+            ) > 0.8
+          for: 5m                       # Must be true for 5 minutes before firing
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High CPU usage detected"
+            description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has CPU usage above 80% for more than 5 minutes. Current value: {{ $value | humanizePercentage }}"
+            runbook_url: "https://wiki.example.com/runbooks/high-cpu"
+
+        # Alert: Pod CPU usage > 95% for 2 minutes (critical)
+        - alert: CriticalCPUUsage
+          expr: |
+            (
+              sum(rate(container_cpu_usage_seconds_total{
+                namespace="complex-app",
+                container!=""
+              }[2m])) by (pod)
+              /
+              sum(kube_pod_container_resource_requests{
+                namespace="complex-app",
+                resource="cpu"
+              }) by (pod)
+            ) > 0.95
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Critical CPU usage - immediate attention required"
+            description: "Pod {{ $labels.pod }} CPU usage is above 95% for 2+ minutes. Possible CPU throttling occurring."
+
+    # --- High Error Rate Alerts ---
+    - name: error-rate-alerts
+      rules:
+        # Alert: HTTP 5xx error rate > 5% for 5 minutes
+        - alert: HighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{
+                namespace="complex-app",
+                status=~"5.."
+              }[5m])) by (service)
+              /
+              sum(rate(http_requests_total{
+                namespace="complex-app"
+              }[5m])) by (service)
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+            team: backend
+          annotations:
+            summary: "High HTTP error rate detected"
+            description: "Service {{ $labels.service }} has a 5xx error rate above 5%. Current rate: {{ $value | humanizePercentage }}"
+
+        # Alert: HTTP 5xx error rate > 20% (critical)
+        - alert: CriticalErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{
+                namespace="complex-app",
+                status=~"5.."
+              }[2m])) by (service)
+              /
+              sum(rate(http_requests_total{
+                namespace="complex-app"
+              }[2m])) by (service)
+            ) > 0.20
+          for: 2m
+          labels:
+            severity: critical
+            team: backend
+          annotations:
+            summary: "Critical error rate - service degradation"
+            description: "Service {{ $labels.service }} has 5xx error rate above 20%. Immediate investigation required."
+
+    # --- Pod Health Alerts ---
+    - name: pod-health-alerts
+      rules:
+        # Alert: Pod restart count > 3 in 15 minutes
+        - alert: PodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{
+              namespace="complex-app"
+            }[15m]) > 3
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Pod is crash-looping"
+            description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last 15 minutes."
+
+        # Alert: Pod not ready for 5 minutes
+        - alert: PodNotReady
+          expr: |
+            kube_pod_status_ready{
+              namespace="complex-app",
+              condition="true"
+            } == 0
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod not ready"
+            description: "Pod {{ $labels.pod }} has been not-ready for more than 5 minutes."
+
+        # Alert: Deployment has fewer replicas than desired
+        - alert: DeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas{namespace="complex-app"}
+            !=
+            kube_deployment_status_available_replicas{namespace="complex-app"}
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Deployment replica count mismatch"
+            description: "Deployment {{ $labels.deployment }} has {{ $value }} available replicas, expected {{ printf `kube_deployment_spec_replicas{deployment=\"%s\"}` $labels.deployment | query | first | value }}"
+
+    # --- Memory Alerts ---
+    - name: memory-alerts
+      rules:
+        # Alert: Container memory usage > 85% of limit
+        - alert: HighMemoryUsage
+          expr: |
+            (
+              container_memory_working_set_bytes{
+                namespace="complex-app",
+                container!=""
+              }
+              /
+              container_spec_memory_limit_bytes{
+                namespace="complex-app",
+                container!=""
+              }
+            ) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High memory usage - approaching OOM"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} is using {{ $value | humanizePercentage }} of its memory limit."
+
+        # Alert: OOMKilled in last 5 minutes
+        - alert: ContainerOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{
+              namespace="complex-app",
+              reason="OOMKilled"
+            } == 1
+          for: 0m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Container OOMKilled"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} was OOMKilled. Increase memory limits."

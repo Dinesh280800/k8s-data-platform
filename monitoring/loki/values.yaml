@@ -1,0 +1,199 @@
+# =============================================================================
+# LOKI + PROMTAIL - Helm Values
+# =============================================================================
+# Loki: Log aggregation system (like Prometheus, but for logs)
+# Promtail: Agent that ships container logs to Loki
+#
+# INSTALL COMMANDS:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm install loki grafana/loki-stack \
+#     --namespace monitoring \
+#     --values monitoring/loki/values.yaml \
+#     --wait
+#
+# KEY CONCEPTS:
+# - Loki stores logs indexed by labels (not full-text indexed like Elasticsearch)
+# - Promtail runs as DaemonSet on every node, tailing container logs
+# - Logs are queried via LogQL (similar to PromQL)
+#
+# CUSTOMIZATION:
+# - Adjust retention for your storage capacity
+# - Add pipeline stages in promtail for parsing/filtering
+# - Configure chunk_target_size based on log volume
+# =============================================================================
+
+# --- Loki Configuration ---
+loki:
+  enabled: true
+
+  # Resource limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  # Persistence
+  persistence:
+    enabled: true
+    size: 10Gi
+
+  # Loki server configuration
+  config:
+    auth_enabled: false                  # Disable multi-tenancy for simplicity
+
+    server:
+      http_listen_port: 3100
+
+    # Ingester: handles incoming log streams
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1          # 1 for single-node; 3 for production
+      chunk_idle_period: 5m              # Flush chunk after 5m of inactivity
+      chunk_retain_period: 30s
+      max_transfer_retries: 0
+
+    # Schema: how logs are stored
+    schema_config:
+      configs:
+        - from: 2020-01-01
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h                  # New index table every 24h
+
+    # Storage: where logs are persisted
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /data/loki/boltdb-shipper-active
+        cache_location: /data/loki/boltdb-shipper-cache
+        shared_store: filesystem
+      filesystem:
+        directory: /data/loki/chunks
+
+    # Compactor: manages retention
+    compactor:
+      working_directory: /data/loki/compactor
+      shared_store: filesystem
+      retention_enabled: true
+
+    # Limits: per-tenant and global
+    limits_config:
+      retention_period: 72h              # Keep logs for 3 days (dev); 7-30d for prod
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h   # Reject logs older than 7 days
+      max_entries_limit_per_query: 5000
+      ingestion_rate_mb: 10              # Max MB/s ingestion rate
+      ingestion_burst_size_mb: 20        # Burst allowance
+
+    # Table manager
+    table_manager:
+      retention_deletes_enabled: true
+      retention_period: 72h
+
+# --- Promtail Configuration ---
+promtail:
+  enabled: true
+
+  # Resource limits
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  config:
+    # Where to send logs
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+
+    # Positions file (tracks what's been read)
+    positions:
+      filename: /run/promtail/positions.yaml
+
+    # Scrape configs: what logs to collect
+    scrape_configs:
+      # Collect all container logs from Kubernetes
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        pipeline_stages:
+          # Parse JSON logs
+          - json:
+              expressions:
+                level: level
+                msg: msg
+                timestamp: time
+          # Add log level as a label
+          - labels:
+              level:
+          # Parse timestamp
+          - timestamp:
+              source: timestamp
+              format: RFC3339Nano
+        relabel_configs:
+          # Keep only pods with annotation promtail.io/scrape=true (optional filter)
+          # - source_labels: [__meta_kubernetes_pod_annotation_promtail_io_scrape]
+          #   action: keep
+          #   regex: true
+          
+          # Use pod labels as Loki labels
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            target_label: app
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          # Use node name
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+
+# =============================================================================
+# SAMPLE LogQL QUERIES (use in Grafana → Explore → Loki datasource)
+# =============================================================================
+#
+# 1. All logs from the complex-app namespace:
+#    {namespace="complex-app"}
+#
+# 2. Logs from a specific pod:
+#    {namespace="complex-app", pod="complex-app-xyz-abc"}
+#
+# 3. Filter for error level logs:
+#    {namespace="complex-app"} |= "error"
+#    {namespace="complex-app"} | json | level="error"
+#
+# 4. Filter logs containing specific text:
+#    {namespace="complex-app"} |= "connection refused"
+#
+# 5. Regex pattern matching:
+#    {namespace="complex-app"} |~ "status=(4|5)[0-9]{2}"
+#
+# 6. JSON parsing + field filtering:
+#    {namespace="complex-app"} | json | status >= 500
+#
+# 7. Rate of error logs (for alerting):
+#    rate({namespace="complex-app"} |= "error" [5m])
+#
+# 8. Top 10 pods by log volume:
+#    topk(10, sum(rate({namespace="complex-app"}[5m])) by (pod))
+#
+# 9. Logs from last hour excluding health checks:
+#    {namespace="complex-app"} != "/health" != "/ready"
+#
+# 10. Count errors per service:
+#     sum(count_over_time({namespace="complex-app"} |= "error" [1h])) by (app)
+#
+# =============================================================================

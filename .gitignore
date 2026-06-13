@@ -1,0 +1,23 @@
+# Kubernetes
+*.kubeconfig
+kubeconfig
+
+# Secrets (never commit real secrets)
+**/secret-values.yaml
+**/secrets-prod.yaml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Helm downloads
+charts/
+*.tgz
+
+# Temporary
+tmp/
+*.log

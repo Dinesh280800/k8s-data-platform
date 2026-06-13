@@ -1,0 +1,36 @@
+# =============================================================================
+# SERVICE MONITOR (for Prometheus Operator)
+# =============================================================================
+# ServiceMonitor tells Prometheus how to scrape metrics from a Service.
+# This is the preferred method when using kube-prometheus-stack.
+#
+# KEY FIELDS:
+# - spec.selector     → Selects which Service(s) to scrape (required)
+# - spec.endpoints    → How to scrape (port, path, interval) (required)
+# - spec.namespaceSelector → Which namespaces to look in
+#
+# CUSTOMIZATION:
+# - Adjust interval based on metric granularity needs
+# - Add metricRelabelings to drop/rename metrics
+# - Add tlsConfig for secured endpoints
+# =============================================================================
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: complex-app-monitor
+  namespace: monitoring
+  labels:
+    release: monitoring                # Must match Prometheus serviceMonitorSelector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: complex-app
+  namespaceSelector:
+    matchNames:
+      - complex-app
+  endpoints:
+    - port: metrics                     # Named port from the Service
+      path: /metrics
+      interval: 15s                     # Scrape every 15 seconds
+      scrapeTimeout: 10s                # Timeout for each scrape
