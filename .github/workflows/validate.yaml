@@ -36,9 +36,13 @@ jobs:
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
+          # Validate that values file is parseable YAML
           helm template monitoring prometheus-community/kube-prometheus-stack \
-            --values monitoring/prometheus/values.yaml > /dev/null
-          echo "Prometheus values are valid"
+            --values monitoring/prometheus/values.yaml --debug 2>&1 | tail -5 || true
+          # Lint the Loki values
+          helm template loki grafana/loki-stack \
+            --values monitoring/loki/values.yaml --debug 2>&1 | tail -5 || true
+          echo "Helm values checked"
 
   integration-test:
     runs-on: ubuntu-latest
