@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLUSTER_NAME="data-platform-cluster"
+CLUSTER_NAME="${CLUSTER_NAME:-data-platform-cluster}"
 
 log() {
   echo "[INFO] $1"
@@ -96,6 +96,7 @@ install_monitoring() {
     --values "${SCRIPT_DIR}/monitoring/loki/values.yaml" \
     --wait \
     --timeout 5m
+  kubectl apply -f "${SCRIPT_DIR}/monitoring/ingress.yaml"
 }
 
 install_keda() {

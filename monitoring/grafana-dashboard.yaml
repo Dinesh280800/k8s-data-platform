@@ -1,0 +1,173 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-data-platform
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  data-platform.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [],
+      "panels": [
+        {
+          "title": "Request Rate (per service)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "sum by (service) (rate(service_requests_total[2m]))",
+              "legendFormat": "{{service}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "title": "Business Requests (per service)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [
+            {
+              "expr": "sum by (service) (rate(business_requests_total[2m]))",
+              "legendFormat": "{{service}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "title": "Error Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {
+              "expr": "sum by (service) (rate(service_errors_total[2m]))",
+              "legendFormat": "{{service}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "palette-classic"}}}
+        },
+        {
+          "title": "P50 / P95 / P99 Latency",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le, service) (rate(service_request_duration_seconds_bucket[2m])))",
+              "legendFormat": "p50 {{service}}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, service) (rate(service_request_duration_seconds_bucket[2m])))",
+              "legendFormat": "p95 {{service}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, service) (rate(service_request_duration_seconds_bucket[2m])))",
+              "legendFormat": "p99 {{service}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "In-Flight Requests",
+          "type": "gauge",
+          "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16},
+          "targets": [
+            {
+              "expr": "sum by (service) (service_in_flight_requests)",
+              "legendFormat": "{{service}}"
+            }
+          ]
+        },
+        {
+          "title": "Service Uptime",
+          "type": "stat",
+          "gridPos": {"h": 6, "w": 6, "x": 6, "y": 16},
+          "targets": [
+            {
+              "expr": "service_uptime_seconds",
+              "legendFormat": "{{service}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}}
+        },
+        {
+          "title": "Pod CPU Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 22},
+          "targets": [
+            {
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"data-platform\",container!=\"\"}[2m]))",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short"}}
+        },
+        {
+          "title": "Pod Memory Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 22},
+          "targets": [
+            {
+              "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"data-platform\",container!=\"\"})",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "bytes"}}
+        },
+        {
+          "title": "Node CPU Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
+          "targets": [
+            {
+              "expr": "1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m]))",
+              "legendFormat": "{{instance}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}}
+        },
+        {
+          "title": "Node Memory Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
+          "targets": [
+            {
+              "expr": "(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes",
+              "legendFormat": "{{instance}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}}
+        },
+        {
+          "title": "Replicas (data-platform)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+          "targets": [
+            {
+              "expr": "kube_deployment_status_replicas_available{namespace=\"data-platform\"}",
+              "legendFormat": "{{deployment}}"
+            }
+          ]
+        },
+        {
+          "title": "Kubernetes Pod Restarts",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+          "targets": [
+            {
+              "expr": "sum by (pod) (kube_pod_container_status_restarts_total{namespace=~\"data-platform|analytics|messaging|store\"})",
+              "legendFormat": "{{pod}}"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 39,
+      "tags": ["data-platform", "custom"],
+      "templating": {"list": []},
+      "time": {"from": "now-30m", "to": "now"},
+      "title": "Data Platform Overview",
+      "uid": "data-platform-overview"
+    }

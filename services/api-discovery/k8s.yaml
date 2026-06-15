@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: api-discovery
-          image: data-platform/api-discovery:local
+          image: localhost/data-platform/api-discovery:local
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: api-validator
-          image: data-platform/api-validator:local
+          image: localhost/data-platform/api-validator:local
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

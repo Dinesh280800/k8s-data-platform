@@ -7,26 +7,72 @@ metadata:
     release: monitoring
 spec:
   groups:
-    - name: data-platform
+    - name: data-platform.service
       rules:
-        - alert: ApiDiscoveryErrorsHigh
-          expr: rate(api_discovery_errors_total[5m]) > 0.1
+        - alert: ServiceHighErrorRate
+          expr: sum by (service) (rate(service_errors_total[5m])) > 0.1
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.service }} error rate is {{ $value | humanize }}/s"
+            description: "Service {{ $labels.service }} is producing errors above threshold."
+
+        - alert: ServiceHighLatencyP95
+          expr: histogram_quantile(0.95, sum by (le, service) (rate(service_request_duration_seconds_bucket[5m]))) > 2
+          for: 3m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.service }} p95 latency is {{ $value | humanize }}s"
+
+        - alert: ServiceDown
+          expr: up{job=~"api-discovery|api-validator|api-enricher|query-router"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.job }} target is down"
+            description: "Prometheus cannot scrape {{ $labels.instance }}"
+
+        - alert: PodRestarting
+          expr: rate(kube_pod_container_status_restarts_total{namespace=~"data-platform|analytics|messaging|store"}[5m]) > 0
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: API discovery error rate is high
+            summary: "Pod {{ $labels.pod }} is restarting frequently"
+
+    - name: data-platform.infra
+      rules:
         - alert: QueueDepthHigh
-          expr: rabbitmq_queue_messages > 100
-          for: 10m
+          expr: rabbitmq_queue_messages_ready > 100
+          for: 5m
           labels:
             severity: warning
           annotations:
-            summary: RabbitMQ queue depth is high
-        - alert: TrinoQueriesQueued
-          expr: queued_queries > 5
-          for: 10m
+            summary: "RabbitMQ queue depth is {{ $value }}"
+
+        - alert: NodeHighCPU
+          expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85
+          for: 5m
           labels:
             severity: warning
           annotations:
-            summary: Trino query queue is backing up
+            summary: "Node {{ $labels.instance }} CPU above 85%"
+
+        - alert: NodeHighMemory
+          expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.90
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node {{ $labels.instance }} memory above 90%"
+
+        - alert: PersistentVolumeAlmostFull
+          expr: kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PV {{ $labels.persistentvolumeclaim }} is almost full (< 10% free)"

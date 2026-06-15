@@ -56,7 +56,7 @@ Fix for custom images:
 
 ```bash
 for img in api-discovery api-validator api-enricher query-router; do
-  podman save data-platform/${img}:local -o /tmp/${img}.tar
+  podman save "localhost/data-platform/${img}:local" -o /tmp/${img}.tar
   KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive /tmp/${img}.tar --name data-platform-cluster
   rm -f /tmp/${img}.tar
 done
@@ -223,7 +223,135 @@ kubectl patch deployment metrics-server -n kube-system --type='json' \
 kubectl rollout status deployment/metrics-server -n kube-system --timeout=180s
 ```
 
-## 10. Useful quick-debug commands
+## 10. Grafana CrashLoopBackOff: duplicate default datasource
+
+Symptoms:
+
+- Grafana pod shows `CrashLoopBackOff` or `2/3 Running`
+- Logs show: `Only one datasource per organization can be marked as default`
+
+Cause:
+
+- Both `kube-prometheus-stack` and `loki-stack` Helm charts create a datasource ConfigMap with `isDefault: true`.
+
+Checks:
+
+```bash
+kubectl get configmap -n monitoring -l grafana_datasource=1 -o custom-columns=NAME:.metadata.name
+kubectl logs -n monitoring -l app.kubernetes.io/name=grafana -c grafana --tail=50
+```
+
+Fix:
+
+```bash
+# Patch loki's datasource to not be default
+kubectl patch configmap loki-loki-stack -n monitoring --type='json' \
+  -p='[{"op":"replace","path":"/data","value":{"datasource.yaml":"apiVersion: 1\ndatasources:\n- name: Loki\n  type: loki\n  access: proxy\n  url: http://loki:3100\n  isDefault: false\n"}}]'
+
+# Restart Grafana
+kubectl delete pod -n monitoring -l app.kubernetes.io/name=grafana
+```
+
+Prevention:
+
+- In `monitoring/prometheus/values.yaml`, keep `defaultDatasourceEnabled: false` and define only Loki/Alertmanager in `additionalDataSources` (Prometheus is auto-provisioned by the chart).
+
+## 11. Prometheus targets down (kind control-plane)
+
+Symptoms:
+
+- Prometheus targets page shows kube-controller-manager, kube-scheduler, kube-etcd, kube-proxy as down
+
+Cause:
+
+- kind does not expose these control-plane metrics endpoints. This is expected and harmless.
+
+Fix (remove noise):
+
+Already done in `monitoring/prometheus/values.yaml`:
+
+```yaml
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+```
+
+After changing, apply:
+
+```bash
+helm upgrade monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --values monitoring/prometheus/values.yaml --timeout 5m
+```
+
+## 12. Prometheus targets down: Loki ports 7946/9095
+
+Symptoms:
+
+- `kubernetes-pods` job shows Loki targets on ports 7946 and 9095 as down
+- Errors: `connection reset by peer` or `malformed HTTP response`
+
+Cause:
+
+- Port 7946 is memberlist gossip (TCP, not HTTP)
+- Port 9095 is gRPC (binary protocol)
+
+Fix:
+
+Already handled in the scrape config with a drop rule:
+
+```yaml
+- source_labels: [__address__]
+  action: drop
+  regex: .*:(7946|9095)
+```
+
+## 13. Helm upgrade fails: `another operation is in progress`
+
+Symptoms:
+
+- `helm upgrade` returns `UPGRADE FAILED: another operation (install/upgrade/rollback) is in progress`
+
+Cause:
+
+- Previous helm operation was interrupted (Ctrl+C) or timed out.
+
+Fix:
+
+```bash
+# Check history
+helm history monitoring -n monitoring --max 5
+
+# Rollback to last successful revision
+helm rollback monitoring <last-deployed-revision> -n monitoring
+
+# Then retry upgrade
+helm upgrade monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --values monitoring/prometheus/values.yaml --timeout 5m
+```
+
+## 14. kind delete cluster fails with Docker daemon error
+
+Symptoms:
+
+- `kind delete cluster` fails with `Cannot connect to Docker daemon`
+
+Cause:
+
+- Using Podman, but kind defaults to Docker.
+
+Fix:
+
+```bash
+KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name data-platform-cluster
+KIND_EXPERIMENTAL_PROVIDER=podman kind get clusters
+```
+
+## 15. Useful quick-debug commands
 
 Cluster wide non-running pods:
 
@@ -250,4 +378,23 @@ Ingress check:
 ```bash
 kubectl get ingress -A
 kubectl get pods -n ingress-nginx -o wide
+```
+
+Prometheus target health:
+
+```bash
+curl -sS http://prometheus.local/api/v1/targets | python3 -c "
+import sys,json
+d=json.load(sys.stdin)['data']['activeTargets']
+bad=[t for t in d if t.get('health')!='up']
+print(f'total={len(d)} up={len(d)-len(bad)} down={len(bad)}')
+for b in bad:
+    print(f'  {b[\"labels\"].get(\"job\")}: {b.get(\"lastError\",\"\")[:80]}')
+"
+```
+
+Service metrics check:
+
+```bash
+curl -sS http://query.local/metrics | head -30
 ```

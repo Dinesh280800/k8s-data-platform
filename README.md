@@ -32,7 +32,7 @@ For a lightweight local setup, keep the cluster small and start with 1 coordinat
 
 ```bash
 cd /Users/ds/Downloads/Learnings/k8s-data-platform
-chmod +x bootstrap.sh bootstrap-data-platform.sh
+chmod +x bootstrap.sh bootstrap-data-platform.sh reset-cluster.sh
 ./bootstrap.sh
 ```
 
@@ -40,6 +40,24 @@ If you want only the lighter core stack on a small Mac, skip the heavier layers:
 
 ```bash
 SKIP_MONITORING=1 SKIP_KEDA=1 ./bootstrap.sh
+```
+
+## One-command reset (destroy + recreate)
+
+```bash
+./reset-cluster.sh
+```
+
+Light mode reset (no monitoring and no KEDA):
+
+```bash
+./reset-cluster.sh --light
+```
+
+Skip host mapping update:
+
+```bash
+./reset-cluster.sh --skip-hosts
 ```
 
 ## Manual phases
@@ -53,7 +71,7 @@ kind create cluster --name data-platform-cluster --config cluster/kind-config.ya
 
 # Teardown
 ./bootstrap-data-platform.sh delete
-kind delete cluster --name data-platform-cluster
+KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name data-platform-cluster
 ```
 
 ## Service groups

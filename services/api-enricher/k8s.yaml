@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: api-enricher
-          image: data-platform/api-enricher:local
+          image: localhost/data-platform/api-enricher:local
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

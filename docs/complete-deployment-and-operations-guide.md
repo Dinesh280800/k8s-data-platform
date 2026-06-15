@@ -292,19 +292,191 @@ Delete platform namespaces:
 kubectl delete namespace data-platform messaging analytics frontend store keda monitoring --ignore-not-found=true
 ```
 
-Delete kind cluster:
+Delete kind cluster (Podman):
 
 ```bash
-kind delete cluster --name data-platform-cluster
+KIND_EXPERIMENTAL_PROVIDER=podman kind delete cluster --name data-platform-cluster
 ```
 
-## 17. File Map
+One-command reset:
+
+```bash
+./reset-cluster.sh
+```
+
+## 17. Observability Stack
+
+### 17.1 Custom Application Metrics
+
+Each service exposes `/metrics` with these custom Prometheus metrics:
+
+| Metric | Type | Description |
+|---|---|---|
+| `service_requests_total` | counter | All HTTP requests |
+| `business_requests_total` | counter | Requests processed by business logic |
+| `service_errors_total` | counter | Unhandled exceptions |
+| `service_in_flight_requests` | gauge | Currently processing requests |
+| `service_uptime_seconds` | gauge | Time since pod started |
+| `service_request_duration_seconds` | histogram | Latency distribution (11 buckets: 5ms to 10s) |
+| `service_path_requests_total` | counter | Per-path hit counter |
+| `health_checks_total` | counter | Liveness probe hits |
+| `ready_checks_total` | counter | Readiness probe hits |
+
+### 17.2 Infrastructure Metrics (auto-collected)
+
+- **node-exporter**: CPU, memory, disk, network per node
+- **kube-state-metrics**: pod status, deployment replicas, restarts, OOM kills
+- **kubelet/cAdvisor**: container-level CPU and memory per pod
+
+### 17.3 Grafana Dashboard
+
+Auto-loaded via ConfigMap sidecar. View at:
+
+- http://localhost:3000 → Dashboards → "Data Platform Overview"
+
+Dashboard panels:
+- Request rate per service
+- Business request rate
+- Error rate
+- P50/P95/P99 latency histogram
+- In-flight requests gauge
+- Service uptime
+- Pod CPU and memory
+- Node CPU and memory
+- Deployment replica count
+- Pod restart count
+
+### 17.4 PromQL Learning Queries
+
+Open http://prometheus.local and try:
+
+```promql
+# Request rate per service
+sum by (service) (rate(service_requests_total[5m]))
+
+# P95 latency
+histogram_quantile(0.95, sum by (le, service) (rate(service_request_duration_seconds_bucket[5m])))
+
+# Error ratio
+sum by (service) (rate(service_errors_total[5m])) / sum by (service) (rate(service_requests_total[5m]))
+
+# Pod CPU
+sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="data-platform",container!=""}[5m]))
+
+# Node memory percent
+(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes
+
+# Deployment replicas
+kube_deployment_status_replicas_available{namespace="data-platform"}
+```
+
+### 17.5 Alert Rules
+
+Defined in `monitoring/platform-prometheus-rules.yaml`:
+
+| Alert | Fires when |
+|---|---|
+| ServiceHighErrorRate | errors/s > 0.1 for 2m |
+| ServiceHighLatencyP95 | p95 > 2s for 3m |
+| ServiceDown | scrape target unreachable for 1m |
+| PodRestarting | restart rate > 0 for 5m |
+| QueueDepthHigh | RabbitMQ queue > 100 for 5m |
+| NodeHighCPU | > 85% for 5m |
+| NodeHighMemory | > 90% for 5m |
+| PersistentVolumeAlmostFull | PV < 10% free for 5m |
+
+### 17.6 Email Alerting
+
+Configured in `monitoring/prometheus/values.yaml` under `alertmanager.config`.
+
+To activate:
+
+1. Generate Gmail App Password at https://myaccount.google.com/apppasswords
+2. Edit values file:
+   - `smtp_from`: your Gmail
+   - `smtp_auth_username`: your Gmail
+   - `smtp_auth_password`: 16-char app password
+   - `to`: destination email in receivers
+3. Apply:
+
+```bash
+helm upgrade monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --values monitoring/prometheus/values.yaml --timeout 5m
+```
+
+Test with a manual alert:
+
+```bash
+curl -X POST http://alertmanager.local/api/v1/alerts \
+  -H 'Content-Type: application/json' \
+  -d '[{"labels":{"alertname":"TestEmail","severity":"warning","namespace":"data-platform"},"annotations":{"summary":"Test email alert"}}]'
+```
+
+### 17.7 Logging with Loki
+
+Logs are collected by Promtail (DaemonSet) and stored in Loki.
+
+Services emit structured JSON logs:
+
+```json
+{"ts":"2026-06-15T08:30:00Z","level":"info","service":"query-router","msg":"business_request","path":"/query","method":"POST"}
+```
+
+Query in Grafana → Explore → Loki datasource:
+
+```logql
+# All data-platform logs
+{namespace="data-platform"}
+
+# Specific service
+{namespace="data-platform"} | json | service="query-router"
+
+# Errors only
+{namespace="data-platform"} | json | level="error"
+
+# Business requests
+{namespace="data-platform"} | json | msg="business_request"
+
+# Rate of errors per service
+sum by (service) (rate({namespace="data-platform"} | json | level="error" [5m]))
+```
+
+### 17.8 Prometheus Targets (kind-specific)
+
+In kind, these control-plane targets are always down (expected):
+
+- kube-controller-manager
+- kube-scheduler
+- kube-etcd
+- kube-proxy
+
+These are disabled in `monitoring/prometheus/values.yaml`:
+
+```yaml
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+```
+
+## 18. File Map
 
 - `cluster/kind-config.yaml`: kind topology and host port mappings
 - `bootstrap.sh`: full bootstrap automation
 - `bootstrap-data-platform.sh`: app/platform-only apply and delete
 - `build-images.sh`: image build/load helper
+- `reset-cluster.sh`: one-command teardown and recreate
+- `setup-hosts.sh`: /etc/hosts configuration
 - `monitoring/ingress.yaml`: direct access for Prometheus/Alertmanager
+- `monitoring/grafana-dashboard.yaml`: auto-loaded Grafana dashboard
+- `monitoring/platform-prometheus-rules.yaml`: alert rules
+- `monitoring/platform-service-monitor.yaml`: ServiceMonitor for app services
 - `keda/scaled-object.yaml`: KEDA triggers
-- `test/keda_scale_test.py`: fake queue load test
+- `test/keda_scale_test.py`: fake queue load test for KEDA
 - `test/create-queues.sh`: queue bootstrap helper
+- `test/e2e_smoke.py`: end-to-end pipeline test
+- `services/common/app_server.py`: shared HTTP server with metrics, logging, CORS

@@ -58,10 +58,6 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: postgres
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9187"
-        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: postgres

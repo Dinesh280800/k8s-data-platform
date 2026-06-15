@@ -18,10 +18,10 @@ fi
 
 CLUSTER_NAME="${CLUSTER_NAME:-data-platform-cluster}"
 IMAGES=(
-  "data-platform/api-discovery:local|services/api-discovery/Dockerfile"
-  "data-platform/api-validator:local|services/api-validator/Dockerfile"
-  "data-platform/api-enricher:local|services/api-enricher/Dockerfile"
-  "data-platform/query-router:local|services/query-router/Dockerfile"
+  "localhost/data-platform/api-discovery:local|services/api-discovery/Dockerfile"
+  "localhost/data-platform/api-validator:local|services/api-validator/Dockerfile"
+  "localhost/data-platform/api-enricher:local|services/api-enricher/Dockerfile"
+  "localhost/data-platform/query-router:local|services/query-router/Dockerfile"
 )
 
 echo "[build] Using engine: $ENGINE"
