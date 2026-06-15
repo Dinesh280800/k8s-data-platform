@@ -1,246 +1,97 @@
-# Kubernetes Kind Multi-Node Cluster - Complex Service Deployment
+# Kubernetes Data Platform for Local Mac
 
-A production-grade Kubernetes learning project deployed locally using **kind** (Kubernetes in Docker). Covers the full lifecycle: cluster creation, application deployment, observability, autoscaling, and reliability patterns.
+A lightweight local Kubernetes scaffold for API discovery, queue-based ingestion, SQL storage, Trino querying, monitoring, dashboards, and autoscaling.
 
-## Architecture Overview
+## Flow
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Kind Cluster                                   │
-│                                                                       │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐            │
-│  │ Control Plane │  │   Worker 1    │  │   Worker 2    │            │
-│  │               │  │ (frontend)    │  │ (backend)     │            │
-│  │ • API Server  │  │               │  │               │  ┌────────┐│
-│  │ • etcd        │  │ • App Pods    │  │ • App Pods    │  │Worker 3││
-│  │ • Scheduler   │  │ • Promtail    │  │ • Promtail    │  │(backend)│
-│  │ • Controller  │  │ • Node Exp.   │  │ • Node Exp.   │  │        ││
-│  │ • Ingress     │  │               │  │               │  │        ││
-│  └───────────────┘  └───────────────┘  └───────────────┘  └────────┘│
-│                                                                       │
-│  ┌─────────── Monitoring Namespace ──────────────────────┐           │
-│  │ Prometheus │ Grafana │ Alertmanager │ Loki │ Promtail │           │
-│  └────────────────────────────────────────────────────────┘           │
-│                                                                       │
-│  ┌─── KEDA Namespace ───┐  ┌─── complex-app Namespace ─────────┐    │
-│  │ KEDA Operator         │  │ Deployment (3 replicas)            │    │
-│  │ Metrics API Server    │  │ Service + Ingress                  │    │
-│  └───────────────────────┘  │ HPA/ScaledObject                   │    │
-│                              │ PDB + ConfigMap + Secrets          │    │
-│                              └────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────┘
-```
+`api discovery -> broker -> postgres tables -> trino query layer -> frontend -> monitoring/logging -> grafana dashboards -> keda/hpa`
 
-## Prerequisites
+## What lives where
 
-| Tool | Purpose | Install (macOS) |
-|------|---------|-----------------|
-| Docker or Podman | Container runtime | `brew install --cask docker` or `brew install podman` |
-| kind | Local K8s clusters | `brew install kind` |
-| kubectl | K8s CLI | `brew install kubectl` |
-| helm | Package manager | `brew install helm` |
+- `cluster/` - Kind cluster configuration for local Mac
+- `services/` - API services and the frontend
+- `platform/broker/` - RabbitMQ broker for async work
+- `platform/store/` - Postgres schema and tables
+- `platform/query/` - Trino coordinator and worker scaffold
+- `monitoring/` - Prometheus, Grafana, Loki, and alert rules
+- `keda/` - autoscaling definitions
+- `bootstrap.sh` - one command to create the cluster and deploy the platform
+- `bootstrap-data-platform.sh` - applies only the platform layer
 
-**System requirements:** ~8GB RAM available, ~20GB disk space.
+## Local Mac sizing
+
+Recommended starting point:
+
+- 4 CPU
+- 6 to 8 GB RAM
+- 40 to 70 GB disk
+
+For a lightweight local setup, keep the cluster small and start with 1 coordinator + 1 worker for Trino.
+
+## Quick start
 
 ```bash
-# Quick install all prerequisites (macOS)
-brew install kind kubectl helm
-```
-
-## Quick Start
-
-```bash
-# 1. Clone/navigate to this directory
-cd k8s-kind-project
-
-# 2. Make scripts executable
-chmod +x bootstrap.sh verification/*.sh
-
-# 3. Run full setup (all phases)
+cd /Users/ds/Downloads/Learnings/k8s-data-platform
+chmod +x bootstrap.sh bootstrap-data-platform.sh
 ./bootstrap.sh
-
-# 4. Verify everything works
-./verification/verify.sh
-
-# 5. Test scaling and resilience
-./verification/test-scaling.sh
 ```
 
-## Phased Deployment Plan
-
-### Phase 1: MVP (Cluster + Core App + Basic Monitoring)
+If you want only the lighter core stack on a small Mac, skip the heavier layers:
 
 ```bash
-./bootstrap.sh --phase 1    # Create cluster + ingress + metrics-server
-./bootstrap.sh --phase 2    # Deploy application
+SKIP_MONITORING=1 SKIP_KEDA=1 ./bootstrap.sh
 ```
 
-**What you get:**
-- 4-node kind cluster (1 control-plane + 3 workers)
-- NGINX Ingress Controller
-- metrics-server (for `kubectl top` and HPA)
-- Sample app with 3 replicas, probes, resource limits
-- Service + Ingress routing
-- HPA for CPU/memory autoscaling
-- PodDisruptionBudget
-
-### Phase 2: Observability
+## Manual phases
 
 ```bash
-./bootstrap.sh --phase 3    # Deploy Prometheus + Grafana + Loki
+# Cluster only
+kind create cluster --name data-platform-cluster --config cluster/kind-config.yaml
+
+# Platform only
+./bootstrap-data-platform.sh apply
+
+# Teardown
+./bootstrap-data-platform.sh delete
+kind delete cluster --name data-platform-cluster
 ```
 
-**What you get:**
-- Prometheus (metrics collection, 7-day retention)
-- Grafana (dashboards, accessible at `localhost:30000`)
-- Alertmanager (alert routing)
-- Loki + Promtail (log aggregation)
-- PrometheusRule with CPU/error/pod health alerts
-- ServiceMonitor for app metrics scraping
+## Service groups
 
-### Phase 3: Advanced Autoscaling
+### Services
 
-```bash
-./bootstrap.sh --phase 4    # Deploy KEDA
-```
+- API discovery crawls public API directories, GitHub OpenAPI files, and endpoint sources.
+- API validator checks availability, latency, and basic response health.
+- API enricher adds tags, categories, and metadata.
+- Query router decides whether a query should go to Trino or be handled by the app layer.
+- Frontend is a simple UI entry point.
 
-**What you get:**
-- KEDA operator
-- ScaledObject with multi-trigger scaling (CPU, memory, Prometheus, cron)
-- Scale-to-zero capability for queue workers
-- TriggerAuthentication patterns
+### Platform
 
-## Project Structure
+- RabbitMQ buffers ingestion work so API crawlers do not hit the database directly.
+- Postgres stores APIs, endpoints, health checks, and metadata in schema tables.
+- Trino queries Postgres and can later be expanded to multiple query clusters.
 
-```
-k8s-kind-project/
-├── bootstrap.sh                    # Main setup script (run this first)
-├── README.md                       # This file
-├── kind/
-│   └── cluster-config.yaml         # Kind cluster definition (nodes, networking)
-├── app/
-│   ├── namespace.yaml              # App namespace
-│   ├── configmap.yaml              # Application configuration
-│   ├── secret.yaml                 # Sensitive configuration
-│   ├── deployment.yaml             # Main application (probes, resources, affinity)
-│   ├── service.yaml                # Internal load balancer
-│   ├── ingress.yaml                # External HTTP routing
-│   ├── hpa.yaml                    # Horizontal Pod Autoscaler
-│   └── pdb.yaml                    # Pod Disruption Budget
-├── monitoring/
-│   ├── namespace.yaml              # Monitoring namespace
-│   ├── service-monitor.yaml        # Prometheus scrape config for app
-│   ├── prometheus/
-│   │   ├── values.yaml             # Helm values for kube-prometheus-stack
-│   │   └── alert-rules.yaml        # PrometheusRule with alert definitions
-│   └── loki/
-│       └── values.yaml             # Helm values for Loki + Promtail
-├── keda/
-│   └── scaled-object.yaml          # KEDA ScaledObject + TriggerAuthentication
-└── verification/
-    ├── verify.sh                   # Validation checks (run after bootstrap)
-    └── test-scaling.sh             # Scaling and resilience tests
-```
+### Monitoring
 
-## Access Points
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Application | http://complex-app.local | N/A (add to /etc/hosts) |
-| Grafana | http://localhost:30000 | admin / admin-password |
-| Prometheus | `kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-prometheus 9090:9090` | N/A |
-| Alertmanager | `kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-alertmanager 9093:9093` | N/A |
-
-```bash
-# Add to /etc/hosts for Ingress to work:
-echo "127.0.0.1 complex-app.local" | sudo tee -a /etc/hosts
-```
-
-## Key Concepts Demonstrated
-
-### Self-Healing Patterns
-- **Liveness Probe**: Detects deadlocked containers → automatic restart
-- **Readiness Probe**: Controls traffic routing → unhealthy pods get no traffic
-- **Startup Probe**: Handles slow-starting apps → prevents premature kills
-- **PDB**: Protects availability during voluntary disruptions (drains, upgrades)
-- **Anti-affinity**: Spreads pods across nodes → survives node failure
+- Prometheus scrapes service metrics.
+- Loki collects logs.
+- Grafana dashboards show platform health, queue depth, Trino load, and API throughput.
+- Alert rules flag API failures, queue growth, and query backlog.
 
 ### Autoscaling
-- **HPA**: Scales on CPU/memory utilization (reactive)
-- **KEDA**: Scales on external events (queues, custom metrics, cron) + scale-to-zero
-- **Behavior tuning**: Stabilization windows prevent flapping
 
-### Observability
-- **Metrics**: Prometheus scrapes → stored 7 days → Grafana visualizes
-- **Logs**: Promtail collects → Loki stores → query with LogQL
-- **Alerts**: PrometheusRule defines conditions → Alertmanager routes notifications
+- HPA scales on CPU and memory.
+- KEDA scales workers on queue depth.
 
-## Environment Customization (Dev → Prod)
+## Notes
 
-| Setting | Dev (current) | Staging | Production |
-|---------|---------------|---------|------------|
-| Replicas | 3 | 3-5 | 5-20 |
-| HPA max | 10 | 20 | 50 |
-| CPU request | 100m | 250m | 500m |
-| Memory request | 128Mi | 256Mi | 512Mi |
-| Prometheus retention | 7d | 15d | 30-90d |
-| Loki retention | 72h | 7d | 30d |
-| PDB minAvailable | 2 | 3 | N-1 |
-| Alertmanager receivers | webhook | Slack | PagerDuty + Slack |
-| Secret management | stringData | sealed-secrets | Vault/external-secrets |
-| Ingress TLS | disabled | self-signed | cert-manager + Let's Encrypt |
+- Replace `ghcr.io/YOUR_ORG/...` images with real builds before running end-to-end.
+- This is intentionally lightweight for local Mac development.
+- If you want separate Trino clusters later, add a second coordinator/worker set under `platform/query/` and route users by workload class.
 
-## Useful Commands
+## Documentation
 
-```bash
-# --- Cluster ---
-kubectl get nodes -o wide                          # Node status
-kubectl top nodes                                  # Node resource usage
-
-# --- Application ---
-kubectl get all -n complex-app                     # All app resources
-kubectl top pods -n complex-app                    # Pod resource usage
-kubectl logs -n complex-app -l app.kubernetes.io/name=complex-app --tail=50  # Recent logs
-kubectl rollout history deployment/complex-app -n complex-app   # Deployment history
-kubectl rollout undo deployment/complex-app -n complex-app      # Rollback
-
-# --- Scaling ---
-kubectl get hpa -n complex-app -w                  # Watch HPA (live updates)
-kubectl get scaledobject -n complex-app            # KEDA status
-kubectl describe hpa -n complex-app                # Detailed HPA info
-
-# --- Monitoring ---
-kubectl get prometheusrule -n monitoring           # Alert rules
-kubectl get servicemonitor -n monitoring           # Scrape configs
-kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus --tail=20
-
-# --- Debugging ---
-kubectl describe pod <pod-name> -n complex-app     # Pod events
-kubectl get events -n complex-app --sort-by='.lastTimestamp'  # Recent events
-kubectl exec -it <pod-name> -n complex-app -- sh   # Shell into pod
-
-# --- Cleanup ---
-./bootstrap.sh --destroy                           # Delete entire cluster
-```
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Pods stuck in Pending | Check `kubectl describe pod` → likely resource constraints. Reduce requests or add nodes. |
-| HPA not scaling | Wait 60s for metrics. Check `kubectl describe hpa`. Ensure metrics-server is running. |
-| Ingress not working | Verify ingress controller: `kubectl get pods -n ingress-nginx`. Check /etc/hosts entry. |
-| Grafana not accessible | Port 30000 may be in use. Change nodePort in values.yaml. |
-| Prometheus "no data" | Check ServiceMonitor labels match. Verify app exposes /metrics endpoint. |
-| KEDA not scaling | Check ScaledObject status: `kubectl describe scaledobject -n complex-app` |
-| Nodes NotReady | Docker/Podman may be resource-constrained. Restart Docker, increase resources. |
-
-## Tear Down
-
-```bash
-# Delete the entire cluster (removes everything)
-./bootstrap.sh --destroy
-
-# Or manually:
-kind delete cluster --name complex-cluster
-```
+- `docs/complete-deployment-and-operations-guide.md` - full step-by-step deployment, validation, querying, monitoring, and autoscaling operations.
+- `docs/troubleshooting-guide.md` - symptom-based troubleshooting with direct fix commands.
+- `docs/data-platform-architecture.md` - architecture and namespace overview.

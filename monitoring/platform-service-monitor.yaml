@@ -1,0 +1,29 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: data-platform-services
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - data-platform
+      - frontend
+      - store
+      - analytics
+      - messaging
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - api-discovery
+          - api-validator
+          - api-enricher
+          - query-router
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

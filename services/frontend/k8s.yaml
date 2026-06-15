@@ -1,0 +1,262 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: frontend
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/part-of: data-platform
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-site
+  namespace: frontend
+data:
+  index.html: |
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Data Platform SQL Console</title>
+        <style>
+          :root {
+            --bg: #0f1420;
+            --panel: #1b2232;
+            --ink: #e7eefb;
+            --muted: #9fb0cf;
+            --ok: #34d399;
+            --accent: #60a5fa;
+            --warn: #fbbf24;
+            --err: #f87171;
+          }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            background: radial-gradient(circle at 20% -10%, #273554 0%, var(--bg) 45%);
+            color: var(--ink);
+            font-family: "Menlo", "Consolas", monospace;
+          }
+          .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+          .panel {
+            background: linear-gradient(180deg, #212b3f 0%, var(--panel) 100%);
+            border: 1px solid #2e3a55;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 14px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+          }
+          h1 { margin: 0 0 8px; font-size: 28px; }
+          p { color: var(--muted); margin: 0; }
+          textarea {
+            width: 100%;
+            min-height: 130px;
+            border: 1px solid #334260;
+            border-radius: 10px;
+            background: #0f1728;
+            color: #d7e2f7;
+            padding: 12px;
+            font-size: 14px;
+          }
+          .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+          button {
+            background: var(--accent);
+            color: #061125;
+            border: 0;
+            border-radius: 10px;
+            font-weight: 700;
+            padding: 10px 14px;
+            cursor: pointer;
+          }
+          button.secondary { background: #334260; color: #dbe9ff; }
+          input {
+            width: 100px;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid #334260;
+            background: #0f1728;
+            color: #dbe9ff;
+          }
+          .status { color: var(--muted); }
+          .status.ok { color: var(--ok); }
+          .status.warn { color: var(--warn); }
+          .status.err { color: var(--err); }
+          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          th, td { border-bottom: 1px solid #2e3a55; padding: 8px; text-align: left; }
+          th { color: #9cc0ff; }
+          .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+          .chip { padding: 5px 9px; border-radius: 999px; border: 1px solid #3b4a68; color: #c7d8f7; }
+          @media (max-width: 720px) {
+            h1 { font-size: 22px; }
+            textarea { min-height: 150px; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="panel">
+            <h1>Data Platform SQL Console</h1>
+            <p>Run read queries through query-router. The router chooses interactive vs analytics cluster and executes on Trino.</p>
+          </div>
+
+          <div class="panel">
+            <textarea id="sql">SELECT * FROM postgresql.catalog.apis LIMIT 20</textarea>
+            <div class="row">
+              <button id="run">Run Query</button>
+              <button class="secondary" id="sample1">Sample: List APIs</button>
+              <button class="secondary" id="sample2">Sample: Group By Source</button>
+              <label>Max rows <input id="maxRows" type="number" min="1" max="1000" value="200"></label>
+            </div>
+            <div class="chips">
+              <div class="chip" id="chip-cluster">cluster: -</div>
+              <div class="chip" id="chip-route">route: -</div>
+              <div class="chip" id="chip-rows">rows: 0</div>
+            </div>
+            <div id="status" class="status" style="margin-top:10px;">Ready.</div>
+          </div>
+
+          <div class="panel" id="resultPanel">
+            <table id="resultTable"></table>
+          </div>
+        </div>
+
+        <script>
+          const sqlEl = document.getElementById("sql");
+          const maxRowsEl = document.getElementById("maxRows");
+          const statusEl = document.getElementById("status");
+          const tableEl = document.getElementById("resultTable");
+          const chipCluster = document.getElementById("chip-cluster");
+          const chipRoute = document.getElementById("chip-route");
+          const chipRows = document.getElementById("chip-rows");
+
+          function setStatus(text, cls) {
+            statusEl.textContent = text;
+            statusEl.className = `status ${cls || ""}`;
+          }
+
+          function renderTable(columns, rows) {
+            if (!columns || !columns.length) {
+              tableEl.innerHTML = "<tr><td>No columns returned.</td></tr>";
+              return;
+            }
+            const head = `<tr>${columns.map(c => `<th>${c}</th>`).join("")}</tr>`;
+            const body = rows.length
+              ? rows.map(r => `<tr>${r.map(v => `<td>${v === null ? "NULL" : String(v)}</td>`).join("")}</tr>`).join("")
+              : `<tr><td colspan="${columns.length}">No rows.</td></tr>`;
+            tableEl.innerHTML = head + body;
+          }
+
+          async function runQuery() {
+            const query = sqlEl.value.trim();
+            if (!query) {
+              setStatus("Type a SQL query first.", "warn");
+              return;
+            }
+            setStatus("Running query...", "");
+            try {
+              const response = await fetch("http://query.local/query", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ query, maxRows: Number(maxRowsEl.value || 200) })
+              });
+              const data = await response.json();
+              if (data.status !== "ok") {
+                setStatus(`Error: ${data.error || "Unknown error"}`, "err");
+                chipCluster.textContent = `cluster: ${data.cluster || "-"}`;
+                chipRoute.textContent = `route: ${data.route || "-"}`;
+                chipRows.textContent = "rows: 0";
+                tableEl.innerHTML = "";
+                return;
+              }
+              chipCluster.textContent = `cluster: ${data.cluster}`;
+              chipRoute.textContent = `route: ${data.route}`;
+              chipRows.textContent = `rows: ${data.rowCount}`;
+              renderTable(data.columns, data.rows);
+              setStatus(data.truncated ? "Success (truncated to max rows)." : "Success.", data.truncated ? "warn" : "ok");
+            } catch (error) {
+              setStatus(`Request failed: ${error}`, "err");
+            }
+          }
+
+          document.getElementById("run").addEventListener("click", runQuery);
+          document.getElementById("sample1").addEventListener("click", () => {
+            sqlEl.value = "SELECT api_id, name, source, discovered_at FROM postgresql.catalog.apis ORDER BY discovered_at DESC LIMIT 20";
+          });
+          document.getElementById("sample2").addEventListener("click", () => {
+            sqlEl.value = "SELECT source, count(*) AS api_count FROM postgresql.catalog.apis GROUP BY source ORDER BY api_count DESC";
+          });
+        </script>
+      </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: frontend
+  labels:
+    app.kubernetes.io/name: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: nginx:1.25-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: site
+              mountPath: /usr/share/nginx/html
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: site
+          configMap:
+            name: frontend-site
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: frontend
+  labels:
+    app.kubernetes.io/name: frontend
+spec:
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+  namespace: frontend
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: frontend.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http

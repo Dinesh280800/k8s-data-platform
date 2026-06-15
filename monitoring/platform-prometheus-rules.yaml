@@ -1,0 +1,32 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: data-platform-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: data-platform
+      rules:
+        - alert: ApiDiscoveryErrorsHigh
+          expr: rate(api_discovery_errors_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: API discovery error rate is high
+        - alert: QueueDepthHigh
+          expr: rabbitmq_queue_messages > 100
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: RabbitMQ queue depth is high
+        - alert: TrinoQueriesQueued
+          expr: queued_queries > 5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Trino query queue is backing up

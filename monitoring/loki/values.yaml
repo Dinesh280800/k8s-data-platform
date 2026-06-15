@@ -30,16 +30,16 @@ loki:
   # Resource limits
   resources:
     requests:
-      cpu: 100m
-      memory: 256Mi
+      cpu: 50m
+      memory: 128Mi
     limits:
-      cpu: 500m
-      memory: 1Gi
+      cpu: 250m
+      memory: 512Mi
 
   # Persistence
   persistence:
     enabled: true
-    size: 10Gi
+    size: 2Gi
 
   # Loki server configuration
   config:
@@ -87,18 +87,18 @@ loki:
 
     # Limits: per-tenant and global
     limits_config:
-      retention_period: 72h              # Keep logs for 3 days (dev); 7-30d for prod
+      retention_period: 24h              # Keep logs for 1 day on a small local cluster
       enforce_metric_name: false
       reject_old_samples: true
-      reject_old_samples_max_age: 168h   # Reject logs older than 7 days
+      reject_old_samples_max_age: 24h    # Reject logs older than 1 day
       max_entries_limit_per_query: 5000
-      ingestion_rate_mb: 10              # Max MB/s ingestion rate
-      ingestion_burst_size_mb: 20        # Burst allowance
+      ingestion_rate_mb: 4               # Lower ingestion rate for local use
+      ingestion_burst_size_mb: 8         # Smaller burst allowance
 
     # Table manager
     table_manager:
       retention_deletes_enabled: true
-      retention_period: 72h
+      retention_period: 24h
 
 # --- Promtail Configuration ---
 promtail:
@@ -107,11 +107,11 @@ promtail:
   # Resource limits
   resources:
     requests:
-      cpu: 50m
-      memory: 64Mi
+      cpu: 25m
+      memory: 32Mi
     limits:
-      cpu: 200m
-      memory: 256Mi
+      cpu: 100m
+      memory: 128Mi
 
   config:
     # Where to send logs

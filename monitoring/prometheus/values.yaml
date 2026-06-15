@@ -40,17 +40,17 @@ prometheus:
 
   prometheusSpec:
     # Retention: how long to keep metrics data
-    retention: 7d                        # Keep 7 days of data (dev: 1-7d, prod: 15-90d)
-    retentionSize: "5GB"                 # Max storage size
+    retention: 3d                        # Keep 3 days of data for a small local cluster
+    retentionSize: "2GB"                 # Smaller max storage size
 
     # Resource limits for Prometheus server
     resources:
       requests:
-        cpu: 200m
-        memory: 512Mi
+        cpu: 100m
+        memory: 256Mi
       limits:
-        cpu: 1000m
-        memory: 2Gi
+        cpu: 500m
+        memory: 768Mi
 
     # Storage configuration
     storageSpec:
@@ -59,7 +59,7 @@ prometheus:
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
-              storage: 10Gi             # PVC size (adjust based on retention)
+              storage: 2Gi              # Smaller PVC size for local development
 
     # Service Monitor selector - scrape all ServiceMonitors in all namespaces
     serviceMonitorSelectorNilUsesHelmValues: false
@@ -113,16 +113,15 @@ grafana:
   # Resource limits
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 50m
+      memory: 64Mi
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: 200m
+      memory: 256Mi
 
   # Persistence for dashboards and settings
   persistence:
-    enabled: true
-    size: 2Gi
+    enabled: false
 
   # Additional datasources (Loki added here; Prometheus + Alertmanager are auto-configured by the chart)
   additionalDataSources:
@@ -149,11 +148,11 @@ alertmanager:
   alertmanagerSpec:
     resources:
       requests:
-        cpu: 50m
-        memory: 64Mi
+        cpu: 25m
+        memory: 32Mi
       limits:
-        cpu: 200m
-        memory: 256Mi
+        cpu: 100m
+        memory: 128Mi
 
   # Alertmanager configuration (routing + receivers)
   config:
@@ -216,8 +215,8 @@ prometheusOperator:
   enabled: true
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 50m
+      memory: 64Mi
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: 200m
+      memory: 256Mi

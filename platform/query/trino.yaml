@@ -1,0 +1,192 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: analytics
+  labels:
+    app.kubernetes.io/name: analytics
+    app.kubernetes.io/part-of: data-platform
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-coordinator-config
+  namespace: analytics
+data:
+  config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    discovery-server.enabled=true
+    discovery.uri=http://trino.analytics.svc.cluster.local:8080
+    query.max-memory=512MB
+    query.max-memory-per-node=128MB
+  jvm.config: |
+    -server
+    -Xmx512M
+    -XX:+UseG1GC
+  node.properties: |
+    node.environment=analytics
+    node.id=trino-coordinator
+    node.data-dir=/data/trino
+  postgresql.properties: |
+    connector.name=postgresql
+    connection-url=jdbc:postgresql://postgres.store.svc.cluster.local:5432/apis
+    connection-user=platform
+    connection-password=platform123
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-worker-config
+  namespace: analytics
+data:
+  config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://trino.analytics.svc.cluster.local:8080
+  jvm.config: |
+    -server
+    -Xmx512M
+    -XX:+UseG1GC
+  node.properties: |
+    node.environment=analytics
+    node.id=trino-worker
+    node.data-dir=/data/trino
+  postgresql.properties: |
+    connector.name=postgresql
+    connection-url=jdbc:postgresql://postgres.store.svc.cluster.local:5432/apis
+    connection-user=platform
+    connection-password=platform123
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-coordinator
+  namespace: analytics
+  labels:
+    app.kubernetes.io/name: trino
+    app.kubernetes.io/component: coordinator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trino
+      app.kubernetes.io/component: coordinator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trino
+        app.kubernetes.io/component: coordinator
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:460
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino/config.properties
+              subPath: config.properties
+            - name: config
+              mountPath: /etc/trino/jvm.config
+              subPath: jvm.config
+            - name: config
+              mountPath: /etc/trino/node.properties
+              subPath: node.properties
+            - name: config
+              mountPath: /etc/trino/catalog/postgresql.properties
+              subPath: postgresql.properties
+      volumes:
+        - name: config
+          configMap:
+            name: trino-coordinator-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-workers
+  namespace: analytics
+  labels:
+    app.kubernetes.io/name: trino
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trino
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trino
+        app.kubernetes.io/component: worker
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:460
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino/config.properties
+              subPath: config.properties
+            - name: config
+              mountPath: /etc/trino/jvm.config
+              subPath: jvm.config
+            - name: config
+              mountPath: /etc/trino/node.properties
+              subPath: node.properties
+            - name: config
+              mountPath: /etc/trino/catalog/postgresql.properties
+              subPath: postgresql.properties
+      volumes:
+        - name: config
+          configMap:
+            name: trino-worker-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino
+  namespace: analytics
+spec:
+  selector:
+    app.kubernetes.io/name: trino
+    app.kubernetes.io/component: coordinator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# NodePort for direct browser access at localhost:8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino-ui
+  namespace: analytics
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: trino
+    app.kubernetes.io/component: coordinator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30002

@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-enricher
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: api-enricher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-enricher
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-enricher
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: api-enricher
+          image: data-platform/api-enricher:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DATABASE_HOST
+              value: postgres.store.svc.cluster.local
+            - name: DATABASE_PORT
+              value: "5432"
+            - name: DATABASE_NAME
+              value: apis
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-enricher
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: api-enricher
+spec:
+  selector:
+    app.kubernetes.io/name: api-enricher
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
