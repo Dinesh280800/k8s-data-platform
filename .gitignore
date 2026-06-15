@@ -21,3 +21,7 @@ charts/
 # Temporary
 tmp/
 *.log
+
+# Python cache
+__pycache__/
+*.pyc
